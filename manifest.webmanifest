@@ -1,0 +1,32 @@
+{
+  "name": "月カレンダー",
+  "short_name": "月カレンダー",
+  "description": "Googleカレンダーをスマートフォンで見やすく操作する個人用PWA",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f5f5f8",
+  "theme_color": "#5b2aa8",
+  "icons": [
+    {
+      "src": "./icons/calendar.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/calendar-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/calendar-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
