@@ -3,6 +3,7 @@ import {
   CalendarApi,
   GOOGLE_SCOPES,
   GoogleApiError,
+  eventToDateResource,
   eventToFormValues,
   formToGoogleEvent,
   normalizeEvent,
@@ -32,6 +33,10 @@ const app = document.querySelector("#app");
 const api = new CalendarApi();
 const today = new Date();
 today.setHours(0, 0, 0, 0);
+const LONG_PRESS_MS = 450;
+const DRAG_START_TOLERANCE = 10;
+let dragGesture = null;
+let ignoreEventClickUntil = 0;
 
 const state = {
   currentMonth: startOfMonth(today),
@@ -164,8 +169,10 @@ function renderDayPanel() {
 
 function renderEventRow(event) {
   const time = event.isAllDay ? "終日" : `${formatTime(event.start)}\n${formatTime(event.end)}`;
+  const canDrag = event.isWritable && !event.isRecurring && !event.isHoliday;
+  const dragLabel = canDrag ? "、長押しでコピーまたは移動" : "";
   return `
-    <button class="event-row ${event.isHoliday ? "holiday-row" : ""}" data-action="event-detail" data-event-id="${escapeHtml(event.id)}" data-calendar-id="${escapeHtml(event.calendarId)}">
+    <button class="event-row ${event.isHoliday ? "holiday-row" : ""}" data-action="event-detail" data-event-id="${escapeHtml(event.id)}" data-calendar-id="${escapeHtml(event.calendarId)}" ${canDrag ? 'data-drag-enabled="true"' : ""} aria-label="${escapeHtml(`${time.replace("\n", "〜")} ${event.title} ${event.calendarName}${dragLabel}`)}">
       <span class="event-time">${escapeHtml(time)}</span>
       <span class="event-color" style="--event-color:${escapeHtml(event.color)}"></span>
       <span class="event-content">
@@ -181,6 +188,7 @@ function renderDialog() {
   if (state.dialog.type === "account") return renderAccountDialog();
   if (state.dialog.type === "detail") return renderDetailDialog(state.dialog.event);
   if (state.dialog.type === "form") return renderEventForm(state.dialog.event || null);
+  if (state.dialog.type === "drop-action") return renderDropActionDialog();
   return "";
 }
 
@@ -278,6 +286,22 @@ function renderEventForm(event) {
   return dialogShell(title, content, "form-sheet");
 }
 
+function renderDropActionDialog() {
+  const { event, targetDate } = state.dialog;
+  const content = `
+    <div class="dialog-body drop-summary">
+      <strong>${escapeHtml(event.title)}</strong>
+      <span>${escapeHtml(formatLongDate(event.start))} → ${escapeHtml(formatLongDate(targetDate))}</span>
+      <p>時刻と予定内容を保ったまま操作します。</p>
+    </div>
+    <div class="dialog-actions drop-actions">
+      <button class="secondary-button" data-action="close-dialog">キャンセル</button>
+      <button class="secondary-button" data-action="drop-copy">コピー</button>
+      <button class="primary-button" data-action="drop-move">移動</button>
+    </div>`;
+  return dialogShell("コピーまたは移動", content, "compact-sheet");
+}
+
 function newEventDefaults() {
   const start = new Date(state.selectedDate);
   const now = new Date();
@@ -305,6 +329,7 @@ function bindEvents() {
     form.addEventListener("submit", saveEvent);
     form.elements.isAllDay.addEventListener("change", toggleAllDayFields);
   }
+  app.querySelectorAll('[data-drag-enabled="true"]').forEach(bindLongPressDrag);
 }
 
 async function handleAction(event) {
@@ -349,6 +374,7 @@ async function handleAction(event) {
     state.dialog = { type: "form" };
     render();
   } else if (action === "event-detail") {
+    if (Date.now() < ignoreEventClickUntil) return;
     const item = findEvent(button.dataset.eventId, button.dataset.calendarId);
     if (item) { state.dialog = { type: "detail", event: item }; render(); }
   } else if (action === "edit-event") {
@@ -359,11 +385,161 @@ async function handleAction(event) {
     if (item) await deleteEvent(item);
   } else if (action === "apply-history") {
     applyHistory(Number(button.dataset.historyIndex));
+  } else if (action === "drop-copy" || action === "drop-move") {
+    await applyDropAction(action === "drop-copy" ? "copy" : "move");
   }
 }
 
 function findEvent(eventId, calendarId) {
   return visibleEvents().find((item) => item.id === eventId && item.calendarId === calendarId);
+}
+
+function bindLongPressDrag(row) {
+  row.addEventListener("touchstart", startTouchDrag, { passive: true });
+  row.addEventListener("touchmove", moveTouchDrag, { passive: false });
+  row.addEventListener("touchend", endTouchDrag, { passive: false });
+  row.addEventListener("touchcancel", cancelDragGesture);
+  row.addEventListener("mousedown", startMouseDrag);
+}
+
+function startDragGesture(row, x, y) {
+  cancelDragGesture();
+  const item = findEvent(row.dataset.eventId, row.dataset.calendarId);
+  if (!item) return;
+  dragGesture = {
+    row,
+    item,
+    startX: x,
+    startY: y,
+    x,
+    y,
+    active: false,
+    timer: window.setTimeout(beginDrag, LONG_PRESS_MS),
+    ghost: null,
+    targetCell: null,
+  };
+}
+
+function movedPastTolerance(x, y) {
+  return Math.hypot(x - dragGesture.startX, y - dragGesture.startY) > DRAG_START_TOLERANCE;
+}
+
+function beginDrag() {
+  if (!dragGesture) return;
+  dragGesture.active = true;
+  dragGesture.row.classList.add("drag-source");
+  document.documentElement.classList.add("event-dragging");
+  app.querySelectorAll(".day-cell").forEach((cell) => cell.classList.add("drop-candidate"));
+
+  const ghost = document.createElement("div");
+  ghost.className = "drag-ghost";
+  ghost.setAttribute("role", "status");
+  ghost.innerHTML = `<strong>${escapeHtml(dragGesture.item.title)}</strong><span>日付へドラッグ</span>`;
+  document.body.append(ghost);
+  dragGesture.ghost = ghost;
+  updateDragPosition(dragGesture.x, dragGesture.y);
+}
+
+function updateDragPosition(x, y) {
+  if (!dragGesture?.active) return;
+  dragGesture.x = x;
+  dragGesture.y = y;
+  dragGesture.ghost.style.left = `${x}px`;
+  dragGesture.ghost.style.top = `${y}px`;
+  const cell = document.elementFromPoint(x, y)?.closest?.(".day-cell") || null;
+  if (cell === dragGesture.targetCell) return;
+  dragGesture.targetCell?.classList.remove("drop-target");
+  dragGesture.targetCell = cell;
+  dragGesture.targetCell?.classList.add("drop-target");
+}
+
+function finishDrag(x, y) {
+  if (!dragGesture?.active) { cancelDragGesture(); return; }
+  updateDragPosition(x, y);
+  const item = dragGesture.item;
+  const dateKey = dragGesture.targetCell?.dataset.date || "";
+  ignoreEventClickUntil = Date.now() + 500;
+  cancelDragGesture();
+
+  if (!dateKey) { showToast("日付セルにドロップしてください"); return; }
+  const targetDate = parseDateKey(dateKey);
+  if (sameDay(item.start, targetDate)) { showToast("別の日付へドロップしてください"); return; }
+  state.dialog = { type: "drop-action", event: item, targetDate };
+  render();
+}
+
+function cancelDragGesture() {
+  if (!dragGesture) return;
+  window.clearTimeout(dragGesture.timer);
+  dragGesture.row?.classList.remove("drag-source");
+  dragGesture.targetCell?.classList.remove("drop-target");
+  dragGesture.ghost?.remove();
+  app.querySelectorAll(".day-cell.drop-candidate").forEach((cell) => cell.classList.remove("drop-candidate"));
+  document.documentElement.classList.remove("event-dragging");
+  dragGesture = null;
+  window.removeEventListener("mousemove", moveMouseDrag);
+  window.removeEventListener("mouseup", endMouseDrag);
+}
+
+function startTouchDrag(event) {
+  if (event.touches.length !== 1) return;
+  const touch = event.touches[0];
+  startDragGesture(event.currentTarget, touch.clientX, touch.clientY);
+}
+
+function moveTouchDrag(event) {
+  if (!dragGesture || event.touches.length !== 1) return;
+  const touch = event.touches[0];
+  dragGesture.x = touch.clientX;
+  dragGesture.y = touch.clientY;
+  if (!dragGesture.active && movedPastTolerance(touch.clientX, touch.clientY)) {
+    cancelDragGesture();
+    return;
+  }
+  if (dragGesture.active) {
+    event.preventDefault();
+    updateDragPosition(touch.clientX, touch.clientY);
+  }
+}
+
+function endTouchDrag(event) {
+  if (!dragGesture) return;
+  if (!dragGesture.active) { cancelDragGesture(); return; }
+  event.preventDefault();
+  event.stopPropagation();
+  const touch = event.changedTouches[0];
+  finishDrag(touch.clientX, touch.clientY);
+}
+
+function startMouseDrag(event) {
+  if (event.button !== 0) return;
+  startDragGesture(event.currentTarget, event.clientX, event.clientY);
+  window.addEventListener("mousemove", moveMouseDrag);
+  window.addEventListener("mouseup", endMouseDrag);
+}
+
+function moveMouseDrag(event) {
+  if (!dragGesture) return;
+  dragGesture.x = event.clientX;
+  dragGesture.y = event.clientY;
+  if (!dragGesture.active && movedPastTolerance(event.clientX, event.clientY)) {
+    cancelDragGesture();
+    return;
+  }
+  if (dragGesture.active) {
+    event.preventDefault();
+    updateDragPosition(event.clientX, event.clientY);
+  }
+}
+
+function endMouseDrag(event) {
+  if (!dragGesture) return;
+  if (dragGesture.active) {
+    event.preventDefault();
+    finishDrag(event.clientX, event.clientY);
+  } else {
+    cancelDragGesture();
+  }
 }
 
 function initializeGoogleIdentity() {
@@ -555,6 +731,31 @@ function validateEventValues(values) {
     if (end <= start) { showError("終了日時は開始日時より後にしてください。"); return false; }
   }
   return true;
+}
+
+async function applyDropAction(mode) {
+  const selection = state.dialog;
+  if (selection?.type !== "drop-action") return;
+  const { event, targetDate } = selection;
+  const resource = eventToDateResource(event, targetDate, mode === "copy");
+  setLoading(true);
+  try {
+    if (mode === "copy") {
+      await api.createEvent(event.calendarId, resource);
+    } else {
+      await api.updateEvent(event.calendarId, event.id, resource);
+    }
+    state.selectedDate = new Date(targetDate);
+    if (!isSameMonth(targetDate, state.currentMonth)) state.currentMonth = startOfMonth(targetDate);
+    state.dialog = null;
+    await Promise.all([loadMonth(false), loadHistory(false)]);
+    showToast(`予定を${mode === "copy" ? "コピー" : "移動"}しました`);
+  } catch (error) {
+    handleApiError(error);
+  } finally {
+    setLoading(false);
+    render();
+  }
 }
 
 async function deleteEvent(item) {

@@ -180,6 +180,20 @@ export function eventToFormValues(event) {
   };
 }
 
+export function eventToDateResource(event, targetDate, copy = false) {
+  const values = eventToFormValues(event);
+  if (event.isAllDay) {
+    values.startDate = toDateKey(targetDate);
+  } else {
+    const start = new Date(targetDate);
+    start.setHours(event.start.getHours(), event.start.getMinutes(), event.start.getSeconds(), event.start.getMilliseconds());
+    const end = new Date(start.getTime() + (event.end - event.start));
+    values.startDateTime = localDateTime(start);
+    values.endDateTime = localDateTime(end);
+  }
+  return formToGoogleEvent(values, copy ? null : event.raw);
+}
+
 function localDateTime(date) {
   const offset = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
