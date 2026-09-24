@@ -44,7 +44,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .error-banner { background: #fce8ea; color: #851c27; }
 
 .calendar-layout { flex: 1 1 auto; height: auto; min-height: 0; display: grid; grid-template-rows: minmax(300px, 58%) minmax(0, 42%); }
-.month-section { min-height: 0; display: grid; grid-template-rows: 28px 1fr; border-bottom: 1px solid var(--line); }
+.month-section { min-height: 0; display: grid; grid-template-rows: 28px 1fr; border-bottom: 1px solid var(--line); touch-action: pan-y; }
 .weekday-row, .month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .weekday-row { border-bottom: 1px solid var(--line); color: #625d68; font-weight: 700; font-size: .78rem; }
 .weekday-row span { display: grid; place-items: center; }

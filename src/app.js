@@ -35,8 +35,11 @@ const today = new Date();
 today.setHours(0, 0, 0, 0);
 const LONG_PRESS_MS = 450;
 const DRAG_START_TOLERANCE = 10;
+const MONTH_SWIPE_MIN_DISTANCE = 50;
 let dragGesture = null;
+let monthSwipe = null;
 let ignoreEventClickUntil = 0;
+let ignoreDateClickUntil = 0;
 
 const state = {
   currentMonth: startOfMonth(today),
@@ -329,6 +332,7 @@ function bindEvents() {
     form.addEventListener("submit", saveEvent);
     form.elements.isAllDay.addEventListener("change", toggleAllDayFields);
   }
+  bindMonthSwipe();
   app.querySelectorAll('[data-drag-enabled="true"]').forEach(bindLongPressDrag);
 }
 
@@ -336,6 +340,7 @@ async function handleAction(event) {
   const button = event.currentTarget;
   const action = button.dataset.action;
   if (action === "select-date") {
+    if (Date.now() < ignoreDateClickUntil) return;
     state.selectedDate = parseDateKey(button.dataset.date);
     if (!isSameMonth(state.selectedDate, state.currentMonth)) {
       state.currentMonth = startOfMonth(state.selectedDate);
@@ -392,6 +397,50 @@ async function handleAction(event) {
 
 function findEvent(eventId, calendarId) {
   return visibleEvents().find((item) => item.id === eventId && item.calendarId === calendarId);
+}
+
+function bindMonthSwipe() {
+  const section = app.querySelector(".month-section");
+  section.addEventListener("touchstart", startMonthSwipe, { passive: true });
+  section.addEventListener("touchmove", moveMonthSwipe, { passive: false });
+  section.addEventListener("touchend", endMonthSwipe, { passive: true });
+  section.addEventListener("touchcancel", cancelMonthSwipe);
+}
+
+function startMonthSwipe(event) {
+  if (event.touches.length !== 1) return;
+  const touch = event.touches[0];
+  monthSwipe = { startX: touch.clientX, startY: touch.clientY, x: touch.clientX, y: touch.clientY, horizontal: false };
+}
+
+function moveMonthSwipe(event) {
+  if (!monthSwipe || event.touches.length !== 1) return;
+  const touch = event.touches[0];
+  monthSwipe.x = touch.clientX;
+  monthSwipe.y = touch.clientY;
+  const dx = touch.clientX - monthSwipe.startX;
+  const dy = touch.clientY - monthSwipe.startY;
+  if (!monthSwipe.horizontal && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) monthSwipe.horizontal = true;
+  if (monthSwipe.horizontal) event.preventDefault();
+}
+
+async function endMonthSwipe() {
+  if (!monthSwipe) return;
+  const dx = monthSwipe.x - monthSwipe.startX;
+  const dy = monthSwipe.y - monthSwipe.startY;
+  const shouldChange = monthSwipe.horizontal && Math.abs(dx) >= MONTH_SWIPE_MIN_DISTANCE && Math.abs(dx) > Math.abs(dy) * 1.2;
+  monthSwipe = null;
+  if (!shouldChange) return;
+
+  ignoreDateClickUntil = Date.now() + 500;
+  const amount = dx < 0 ? 1 : -1;
+  state.currentMonth = addMonths(state.currentMonth, amount);
+  state.selectedDate = addMonths(state.selectedDate, amount);
+  await loadMonth();
+}
+
+function cancelMonthSwipe() {
+  monthSwipe = null;
 }
 
 function bindLongPressDrag(row) {

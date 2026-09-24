@@ -28,7 +28,12 @@ export function endOfMonth(date) {
 }
 
 export function addMonths(date, amount) {
-  return new Date(date.getFullYear(), date.getMonth() + amount, 1);
+  const result = new Date(date);
+  const day = result.getDate();
+  result.setDate(1);
+  result.setMonth(result.getMonth() + amount);
+  result.setDate(Math.min(day, endOfMonth(result).getDate()));
+  return result;
 }
 
 export function monthGrid(date) {
